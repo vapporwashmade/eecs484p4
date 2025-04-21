@@ -85,35 +85,38 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 	vector<uint> disk_pages;
     uint probe_b = MEM_SIZE_IN_PAGE - 2;
 
-    vector<Bucket> buckets(probe_b, Bucket(disk));
     Page *output = mem->mem_page(probe_b + 1);
-
     vector<Page*> buffers(probe_b);
     for (uint i = 0; i < probe_b; ++i) {
         buffers[i] = mem->mem_page(i);
     }
 
     for (size_t i = 0; i < partitions.size(); ++i) {
-        const vector<uint> &left_pages = partitions[i].get_left_rel();
-        for (size_t j = 0; j < left_pages.size(); ++j) {
-            mem->loadFromDisk(disk, left_pages[j], probe_b);
+        // find bigger and smaller relations
+        vector<uint> big = partitions[i].get_left_rel();
+        vector<uint> small = partitions[i].get_right_rel();
+
+        if (partitions[i].num_right_rel_record > partitions[i].num_left_rel_record) {
+            big = partitions[i].get_right_rel();
+            small = partitions[i].get_left_rel();
+        }
+
+        for (size_t j = 0; j < small.size(); ++j) {
+            mem->loadFromDisk(disk, small[j], probe_b);
             Page *input = mem->mem_page(probe_b);
 
             for (uint k = 0; k < input->size(); ++k) {
                 Record r = input->get_record(k);
                 uint bucket = r.probe_hash() % probe_b;
                 Page *buffer = buffers[bucket];
-                // dont think buffer will ever be full, but good to have
-                if (buffer->full()) {
-                    uint disk_page = mem->flushToDisk(disk, bucket);
-                    partitions[bucket].add_left_rel_page(disk_page);
-                }
                 buffer->loadRecord(r);
             }
+
+            // page->reset();
         }
-        const vector<uint> &right_pages = partitions[i].get_right_rel();
-        for (size_t j = 0; j < right_pages.size(); ++j) {
-            mem->loadFromDisk(disk, right_pages[j], probe_b);
+
+        for (size_t j = 0; j < big.size(); ++j) {
+            mem->loadFromDisk(disk, big[j], probe_b);
             Page *input = mem->mem_page(probe_b);
 
             for (uint k = 0; k < input->size(); ++k) {
@@ -123,20 +126,27 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 
                 // search buffer for equals
                 for (uint l = 0; l < buffer->size(); ++l) {
-                    Record r_l = buffer->get_record(l);
-                    if (r_l == r) {
+                    Record r2 = buffer->get_record(l);
+                    if (r == r2) {
                         if (output->full()) {
                             uint disk_page = mem->flushToDisk(disk, probe_b + 1);
                             disk_pages.push_back(disk_page);
                         }
-                        output->loadPair(r_l, r);
+                        output->loadPair(r, r2);
                     }
                 }
             }
+
+            // page->reset();
         }
+
+        for (size_t j = 0; j < probe_b + 1; ++j) {
+            mem->mem_page(j)->reset();
+        }
+
     }
 
-    if (!output->full()) {
+    if (!output->empty()) {
         uint disk_page = mem->flushToDisk(disk, probe_b + 1);
         disk_pages.push_back(disk_page);
     }
